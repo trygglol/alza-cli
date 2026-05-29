@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+build/
+dist/
+wheels/
+
+# uv
+.venv/
+.uv-cache/
+
+# Env
+.env
+.env.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Test artifacts
+.pytest_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+
+# Personal runtime data (must NEVER be committed)
+# Default location is ~/.alza-cli/, but block these patterns inside the repo too
+# in case anyone redirects ALZA_CLI_HOME.
+storage_state.json
+storage_state*.json
+browser-profile/
+cache.db*
+config.toml
+
+# Personal demo / scratch harnesses (contain local paths + email)
+demo_*.py

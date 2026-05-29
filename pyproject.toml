@@ -1,0 +1,44 @@
+[project]
+name = "alza-cli"
+version = "0.1.0"
+description = "Personal CLI for alza.cz research, comparison, login, and cart actions"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [
+    { name = "trygglol", email = "241205723+trygglol@users.noreply.github.com" }
+]
+requires-python = ">=3.11"
+keywords = ["alza", "cli", "scraping", "ecommerce", "czech"]
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Internet :: WWW/HTTP :: Browsers",
+]
+dependencies = [
+    "camoufox[geoip]>=0.4.11",
+    "selectolax>=0.3.32",
+    "typer>=0.20.0",
+    "rich>=14.2.0",
+    "pydantic>=2.12.0",
+    "diskcache>=5.6.3",
+    "python-dotenv>=1.2.0",
+    "platformdirs>=4.5.0",
+]
+
+[project.scripts]
+alza = "alza_cli.cli:app"
+
+[project.urls]
+Homepage = "https://github.com/trygglol/alza-cli"
+Issues = "https://github.com/trygglol/alza-cli/issues"
+
+[build-system]
+requires = ["uv_build>=0.11.9,<0.12.0"]
+build-backend = "uv_build"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
