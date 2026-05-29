@@ -101,7 +101,7 @@ def order(
         help="ACTUALLY place the order (real, paid, non-refundable). Without it: dry-run to summary.",
     ),
     coupon: Optional[str] = typer.Option(None, "--coupon", help="Discount/voucher code to apply on the cart."),
-    box: str = typer.Option("<box>", "--box", help="AlzaBox name substring to match in delivery list."),
+    box: Optional[str] = typer.Option(None, "--box", help="AlzaBox name substring to match (default: ALZA_CLI_BOX env, else Alza's pre-selected delivery)."),
 ) -> None:
     """Place an order: AlzaBox delivery + payment on pickup.
 

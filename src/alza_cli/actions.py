@@ -7,6 +7,7 @@ single fingerprint, single profile — no curl/HTTP fallback.
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 from typing import Optional
 
@@ -601,7 +602,7 @@ async def _scrape_order3(page) -> dict:
       };
       return {
         total: byText('K úhradě s DPH') || byText('Celkem'),
-        delivery: byText('AlzaBox') || byText('<box>'),
+        delivery: byText('AlzaBox') || byText('Doprava'),
         payment: byText('vyzvednutí') || byText('Kartou'),
       };
     }"""
@@ -627,15 +628,20 @@ async def _scrape_order_number(page) -> Optional[str]:
 def order(
     confirm: bool = False,
     coupon: Optional[str] = None,
-    box: str = "<box>",
+    box: Optional[str] = None,
 ) -> dict:
     """Drive the full Alza checkout: AlzaBox delivery + pay-on-pickup.
+
+    The AlzaBox is matched by ``box`` (a name substring) or, if not given, by
+    the ``ALZA_CLI_BOX`` env var; with neither set the order relies on whatever
+    delivery Alza has pre-selected.
 
     SAFETY: with ``confirm=False`` this is a DRY-RUN — it walks to the Order3
     summary and stops WITHOUT clicking "Potvrdit nákup". Only ``confirm=True``
     places the real, paid, non-refundable order.
     """
 
+    box = box or os.environ.get("ALZA_CLI_BOX") or ""
     return asyncio.run(_order_async(confirm=confirm, coupon=coupon, box=box))
 
 
@@ -671,6 +677,11 @@ async def _order_async(confirm: bool, coupon: Optional[str], box: str) -> dict:
         # last delivery and pre-selects it, and these rows behave like
         # checkboxes, so re-clicking a selected one would toggle it OFF.
         if await pay.count() == 0:
+            if not box:
+                raise ParseError(
+                    "No delivery is pre-selected and no box given. Pass --box "
+                    "<AlzaBox name> or set ALZA_CLI_BOX. " + _dbg()
+                )
             try:
                 await page.get_by_text(box, exact=False).first.click(timeout=8000)
             except Exception:
