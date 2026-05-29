@@ -39,6 +39,12 @@ class Review(BaseModel):
 
 class ProductDetail(Product):
     description: Optional[str] = None
+    # Discount fields. All None when the product is sold at its plain price.
+    # ``price_czk`` stays the headline/regular price; ``sale_price_czk`` is the
+    # final price after the discount (e.g. a coupon applied in the cart).
+    sale_price_czk: Optional[float] = None
+    discount_pct: Optional[int] = None
+    coupon_code: Optional[str] = None
     specs: dict[str, str] = Field(default_factory=dict)
     top_reviews: list[Review] = Field(default_factory=list)
 

@@ -92,6 +92,47 @@ def _jsonld_image_url(image) -> Optional[str]:
     return None
 
 
+def _parse_price_spec(offers) -> tuple[Optional[float], Optional[float]]:
+    """Extract (regular_price, sale_price) from JSON-LD offer priceSpecification.
+
+    Alza emits a ``priceSpecification`` list with a RegularPrice and a SalePrice
+    entry whenever a discount applies (coupon or strike-through sale alike).
+    Returns (None, None) when no spec is present.
+    """
+    if isinstance(offers, list):
+        offers = offers[0] if offers else {}
+    if not isinstance(offers, dict):
+        return None, None
+    spec = offers.get("priceSpecification")
+    if isinstance(spec, dict):
+        spec = [spec]
+    if not isinstance(spec, list):
+        return None, None
+    regular = sale = None
+    for entry in spec:
+        if not isinstance(entry, dict):
+            continue
+        price_type = str(entry.get("priceType") or "").lower()
+        try:
+            value = float(entry["price"]) if entry.get("price") is not None else None
+        except (TypeError, ValueError):
+            value = None
+        if value is None:
+            continue
+        if "saleprice" in price_type:
+            sale = value
+        elif "regularprice" in price_type or "listprice" in price_type:
+            regular = value
+    return regular, sale
+
+
+def _coupon_code(tree: HTMLParser) -> Optional[str]:
+    """Coupon code shown in the main price box (e.g. ALZADNY15), if any."""
+    node = tree.css_first(".promo-action-prices__discount-code")
+    code = _text(node)
+    return code or None
+
+
 def parse_search(html: str, query: str) -> list[Product]:
     """Parse alza.cz/search.htm?exps=<query> result page into Product list."""
 
@@ -195,6 +236,8 @@ def parse_product_detail(html: str, url: str) -> ProductDetail:
     rating: Optional[float] = None
     review_count: Optional[int] = None
     image_url: Optional[str] = None
+    sale_price_czk: Optional[float] = None
+    discount_pct: Optional[int] = None
     if ld:
         name = ld.get("name")
         description = ld.get("description")
@@ -209,6 +252,14 @@ def parse_product_detail(html: str, url: str) -> ProductDetail:
             availability_text = offers.get("availability")
             if isinstance(availability_text, str):
                 available = "InStock" in availability_text
+        # Discount: prefer the regular price as the headline, expose the
+        # lower sale price separately. Only treat it as a discount when the
+        # sale price is strictly cheaper.
+        regular, sale = _parse_price_spec(offers)
+        if regular and sale and sale < regular:
+            price_czk = regular
+            sale_price_czk = sale
+            discount_pct = round((1 - sale / regular) * 100)
         agg = ld.get("aggregateRating") or {}
         if isinstance(agg, dict):
             try:
@@ -235,6 +286,8 @@ def parse_product_detail(html: str, url: str) -> ProductDetail:
     specs = _parse_specs(tree)
     reviews = _parse_reviews(tree)
     product_id = _id_from_url(url) or _first_attr(tree.body or tree.root, "data-product-id", "data-id") or ""
+    # Only attach a coupon code when there is an actual discount to apply.
+    coupon_code = _coupon_code(tree) if discount_pct else None
 
     return ProductDetail(
         id=str(product_id),
@@ -248,6 +301,9 @@ def parse_product_detail(html: str, url: str) -> ProductDetail:
         review_count=review_count,
         image_url=image_url,
         description=description,
+        sale_price_czk=sale_price_czk,
+        discount_pct=discount_pct,
+        coupon_code=coupon_code,
         specs=specs,
         top_reviews=reviews,
     )
