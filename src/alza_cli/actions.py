@@ -521,3 +521,23 @@ async def _diagnose_probe() -> dict:
 def warm() -> bool:
     ensure_home()
     return asyncio.run(browser.warm_interactive())
+
+
+def checkout() -> bool:
+    """Open the cart in a headed, logged-in browser for manual completion.
+
+    The CLI deliberately stops here: it never clicks the final "Objednat"
+    button. The human picks delivery + payment and confirms the order.
+    """
+
+    ensure_home()
+    message = (
+        "Otevřel jsem KOŠÍK v přihlášeném prohlížeči.\n"
+        "Dokonči objednávku ručně:\n"
+        "  1) zkontroluj položky,\n"
+        "  2) vlož slevový kód (pokud máš),\n"
+        "  3) zvol dopravu a platbu,\n"
+        "  4) potvrď objednávku.\n"
+        "Až budeš hotový, zavři okno (cmd+Q nebo X)."
+    )
+    return asyncio.run(browser.open_headed_at(f"{BASE_URL}/Order1.htm", message))

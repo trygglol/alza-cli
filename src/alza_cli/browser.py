@@ -103,6 +103,28 @@ async def warm_interactive() -> bool:
     return paths.storage_state.exists()
 
 
+async def open_headed_at(url: str, message: str) -> bool:
+    """Open a headed browser on ``url`` using the logged-in profile and wait
+    until the user closes the window. Persists the (possibly refreshed)
+    storage state on close. Used by ``checkout`` to land on the cart so the
+    human finishes delivery + payment + the final confirm themselves.
+    """
+
+    paths = ensure_home()
+    async with open_context(headless=False) as context:
+        page = await context.new_page()
+        dbg.attach_page_logging(page)
+        await page.goto(url, wait_until="domcontentloaded")
+        await dbg.capture(page, "checkout:opened")
+        print(message, flush=True)
+        await _wait_until_user_closes(context)
+        try:
+            await context.storage_state(path=str(paths.storage_state))
+        except Exception:
+            pass
+    return paths.storage_state.exists()
+
+
 async def login_interactive(email: Optional[str] = None) -> bool:
     """Open headed login via Alza OIDC identity flow.
 

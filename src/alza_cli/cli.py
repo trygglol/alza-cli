@@ -82,6 +82,18 @@ def warm() -> None:
 
 
 @app.command()
+def checkout() -> None:
+    """Open the cart in a logged-in browser to finish the order manually.
+
+    The CLI never places the order itself: it lands you on alza.cz/Order1.htm
+    in the persistent profile so you pick delivery + payment and confirm.
+    """
+
+    _handle("checkout", actions.checkout)
+    typer.echo("Košík otevřen v prohlížeči. Dokonči objednávku ručně a okno zavři.")
+
+
+@app.command()
 def search(
     query: str = typer.Argument(..., help="Search query, e.g. 'iphone 16'"),
     limit: int = typer.Option(20, "--limit", "-n", help="Max results."),
