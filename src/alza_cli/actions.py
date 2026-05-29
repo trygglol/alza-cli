@@ -399,38 +399,80 @@ def _parse_cart(html: str) -> Cart:
 # ----- Orders -----
 
 
+# The orders page is a client-rendered React app with utility-class markup and
+# no per-row semantic classes. The one stable anchor per order is the
+# ``order-details-<id>.htm`` link; price/date are pulled from leaf elements
+# inside each order's row (reading the row's full innerText concatenates the
+# year + order number + price with identical whitespace, so it can't be split).
+_ORDERS_EXTRACT_JS = r"""
+() => {
+  const priceRe=/^\d[\d\s ]*\sKč$/;
+  const dateRe=/^\d{1,2}\.\s*\d{1,2}\.\s*\d{4}$/;
+  const statRe=/(Uzav\w+|Vyřízen\w+|Storno\w*|Zrušen\w+|Odeslán\w*|Připravuje\w*|připravujeme\w*|Zpracov\w+|Doručen\w*|Aktivní|Ček\w+)/i;
+  const seen=new Set(), out=[];
+  for (const a of document.querySelectorAll('a[href*="order-details-"]')) {
+    const m=(a.getAttribute('href')||'').match(/order-details-(\d+)/); if(!m) continue;
+    const id=m[1]; if(seen.has(id)) continue; seen.add(id);
+    let row=a;
+    for(let i=0;i<7;i++){ if(!row.parentElement) break; row=row.parentElement;
+      const t=row.innerText||''; if(/Kč/.test(t)&&/\d{4}/.test(t)) break; }
+    let price=null,date=null;
+    for(const el of row.querySelectorAll('*')){
+      if(el.children.length>1) continue;
+      const t=(el.innerText||'').trim();
+      if(!price && priceRe.test(t)) price=t.replace(/\s+/g,' ');
+      if(!date && dateRe.test(t)) date=t.replace(/\s+/g,' ');
+    }
+    const sm=(row.innerText||'').match(statRe);
+    const num=((a.innerText||'').replace(/\s+/g,'').match(/\d{6,}/)||[])[0]||id;
+    out.push({id, number:num, date, price, status: sm?sm[1]:null});
+  }
+  return out;
+}
+"""
+
+
 def orders(limit: int = 10) -> list[Order]:
-    try:
-        html = _fetch(f"{BASE_URL}/my-account/orders.htm")
-    except NeedsWarm as e:
-        raise NeedsLogin("Orders page requires a logged-in session.") from e
-    return _parse_orders(html)[:limit]
-
-
-def _parse_orders(html: str) -> list[Order]:
-    from selectolax.parser import HTMLParser
-
-    tree = HTMLParser(html)
-    if tree.css_first("input[name='password']") or tree.css_first("form#loginForm"):
-        raise NeedsLogin("Orders page requires login.")
-    out: list[Order] = []
-    for row in tree.css(".order-row, [data-order-id], .orders-list .order"):
-        oid = row.attributes.get("data-order-id") or ""
-        if not oid:
-            num = row.css_first(".order-number, .order-id")
-            oid = num.text(strip=True) if num else ""
-        date = row.css_first(".date, .order-date")
-        status = row.css_first(".status, .order-status")
-        total = row.css_first(".total, .order-total")
-        out.append(
-            Order(
-                id=str(oid or "").strip() or "?",
-                date=date.text(strip=True) if date else None,
-                status=status.text(strip=True) if status else None,
-                total_czk=parsers._parse_price(total.text(strip=True) if total else None),
-            )
+    rows = asyncio.run(_orders_async())
+    out = [
+        Order(
+            id=str(r.get("number") or r.get("id") or "?"),
+            date=r.get("date"),
+            status=r.get("status"),
+            total_czk=parsers._parse_price(r.get("price")),
         )
-    return out
+        for r in rows
+    ]
+    return out[:limit]
+
+
+async def _orders_async() -> list[dict]:
+    async with browser.open_context(headless=True) as context:
+        page = await context.new_page()
+        dbg.attach_page_logging(page)
+        await page.goto(f"{BASE_URL}/my-account/orders.htm", wait_until="domcontentloaded")
+        if "identity.alza.cz" in page.url:
+            await page.close()
+            raise NeedsLogin("Orders page requires login.")
+        if _is_cf_challenge(await page.content()):
+            await page.close()
+            raise NeedsWarm("Cloudflare challenge on orders page.")
+        # Wait for actual order rows, not just the container — React hydrates
+        # the list after the container mounts, so the container alone is not
+        # enough (it yields an empty scrape).
+        try:
+            await page.wait_for_selector('a[href*="order-details-"]', timeout=15000)
+        except Exception:
+            pass
+        await page.wait_for_timeout(800)
+        await dbg.capture(page, "orders:list")
+        rows = await page.evaluate(_ORDERS_EXTRACT_JS)
+        if not rows:
+            # One retry in case the list is still hydrating.
+            await page.wait_for_timeout(3000)
+            rows = await page.evaluate(_ORDERS_EXTRACT_JS)
+        await page.close()
+    return rows or []
 
 
 # ----- Diagnose / warm -----
