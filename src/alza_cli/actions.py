@@ -101,31 +101,35 @@ def login(email: Optional[str] = None) -> bool:
 
 
 def whoami() -> WhoAmI:
+    # Authoritative signal: real auth cookies in the persisted session. DOM
+    # scraping (below) only enriches the name and can veto on a login form.
+    cookie_logged_in = browser.storage_has_auth()
     try:
         html = _fetch(f"{BASE_URL}/my-account/")
     except NeedsWarm:
-        return WhoAmI(logged_in=False)
-    return _parse_whoami(html)
+        return WhoAmI(logged_in=cookie_logged_in)
+    return _parse_whoami(html, cookie_logged_in=cookie_logged_in)
 
 
-def _parse_whoami(html: str) -> WhoAmI:
+def _parse_whoami(html: str, cookie_logged_in: bool = False) -> WhoAmI:
     from selectolax.parser import HTMLParser
 
     tree = HTMLParser(html)
+    # A real login form means the session is dead server-side, even if stale
+    # auth cookies linger on disk.
     if tree.css_first("form#loginForm") or tree.css_first("input[name='password']"):
         return WhoAmI(logged_in=False)
     name_node = (
         tree.css_first(".user-name")
         or tree.css_first(".header-user__name")
         or tree.css_first("[data-user-name]")
-        or tree.css_first("h1")
+        or tree.css_first("[data-testid='headerContextMenuToggleAccount'] .name")
     )
     email_node = tree.css_first(".user-email") or tree.css_first("[data-user-email]")
     name = name_node.text(strip=True) if name_node else None
     email = email_node.text(strip=True) if email_node else None
-    if name or email:
-        return WhoAmI(logged_in=True, name=name, email=email)
-    return WhoAmI(logged_in=False)
+    logged_in = cookie_logged_in or bool(name or email)
+    return WhoAmI(logged_in=logged_in, name=name, email=email)
 
 
 # ----- Cart -----
@@ -190,6 +194,23 @@ async def _cart_add_async(product_id: str, qty: int) -> Cart:
                 f"Could not find product data-code or add-to-cart button at {product_url}. "
                 f"Debug snapshot in {dbg.debug_dir()}"
             )
+        # Wait until the item shows up in the cart so we never parse a snapshot
+        # captured before the server-rendered row lands.
+        pid, _ = _normalize_product_arg(product_id)
+        try:
+            await page.wait_for_function(
+                """(pid) => {
+                  const rows = Array.from(document.querySelectorAll('.product.tbody'));
+                  return rows.some(r => {
+                    const c = r.querySelector('[data-commodityid]');
+                    return c && c.getAttribute('data-commodityid') === String(pid);
+                  });
+                }""",
+                arg=pid,
+                timeout=8000,
+            )
+        except Exception:
+            await page.wait_for_timeout(2000)
         # Parse cart from current page (Order1.htm IS the cart page).
         html = await page.content()
         await page.close()
@@ -258,14 +279,31 @@ async def _cart_remove_async(product_id: str) -> Cart:
               return true;
             }"""
         )
-        await page.wait_for_timeout(2500)
-        await dbg.capture(page, f"cart-remove:after-delete (clicked={clicked})")
         if not clicked:
             await page.close()
             raise ParseError(
                 f"Found options menu but no 'Odstranit' button for product {pid}. "
                 f"Debug snapshot in {dbg.debug_dir()}"
             )
+        # Removal is an AJAX re-render. Wait until the row is actually gone
+        # instead of a fixed sleep, so we never return a stale snapshot that
+        # still lists the just-removed item.
+        try:
+            await page.wait_for_function(
+                """(pid) => {
+                  const rows = Array.from(document.querySelectorAll('.product.tbody'));
+                  return !rows.some(r => {
+                    const c = r.querySelector('[data-commodityid]');
+                    return c && c.getAttribute('data-commodityid') === String(pid);
+                  });
+                }""",
+                arg=pid,
+                timeout=8000,
+            )
+        except Exception:
+            # Fall back to a settle delay if the re-render signal never fires.
+            await page.wait_for_timeout(2500)
+        await dbg.capture(page, f"cart-remove:after-delete (clicked={clicked})")
         html = await page.content()
         await page.close()
     return _parse_cart(html)
@@ -276,6 +314,11 @@ async def _cart_show_async() -> Cart:
         page = await context.new_page()
         dbg.attach_page_logging(page)
         await page.goto(f"{BASE_URL}/Order1.htm", wait_until="domcontentloaded")
+        # Let the cart finish hydrating before snapshotting.
+        try:
+            await page.wait_for_load_state("networkidle", timeout=6000)
+        except Exception:
+            pass
         await dbg.capture(page, "cart-show:loaded")
         html = await page.content()
         await page.close()

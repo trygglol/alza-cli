@@ -21,7 +21,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
-from .config import ensure_home
+from .config import AUTH_COOKIE_HINTS, ensure_home
 
 
 _RUN_ID = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -152,7 +152,7 @@ def storage_state_snapshot() -> dict:
         return {"exists": True, "parse_error": str(e)}
     cookies = data.get("cookies", [])
     names = sorted({c.get("name", "") for c in cookies if c.get("name")})
-    auth_markers = [n for n in names if any(m in n for m in (".ASPXAUTH", "ASPXFORMSAUTH", "AlzaAuth", "AlzaUser", "Alza_Nick", "AlzaCustomer", "AlzaCommerce", "ALZA_SECURITY"))]
+    auth_markers = [n for n in names if any(m in n for m in AUTH_COOKIE_HINTS)]
     cf_markers = [n for n in names if n.startswith("cf_") or n.startswith("__cf") or n in ("cf_clearance",)]
     return {
         "exists": True,

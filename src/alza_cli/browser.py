@@ -12,11 +12,17 @@ auth cookies. ``fetch_html()`` runs headless against the persistent profile.
 from __future__ import annotations
 
 import asyncio
+import json
 from contextlib import asynccontextmanager
 from typing import AsyncIterator, Optional, Sequence
 
 from . import debug as dbg, patch_playwright as _patch
-from .config import BASE_URL, ensure_home
+from .config import (
+    AUTH_COOKIE_HINTS as _AUTH_COOKIE_HINTS,
+    BASE_URL,
+    LOGIN_COMPLETE_COOKIES as _LOGIN_COMPLETE_COOKIES,
+    ensure_home,
+)
 
 # Apply Playwright driver patch at first browser import so every entry path
 # (CLI, library use, tests) benefits without an explicit setup step.
@@ -56,21 +62,23 @@ async def open_context(headless: bool = True) -> AsyncIterator:
                 pass
 
 
-_AUTH_COOKIE_HINTS = (
-    ".ASPXAUTH",
-    "ASPXFORMSAUTH",
-    "AlzaAuth",
-    "AlzaUser",
-    "Alza_Nick",
-    "AlzaCustomer",
-    "AlzaCommerce",
-    "ALZA_SECURITY",
-    "ALZALOGGED",
-    "ALZACOMPANY",
-    "AlzaCustomerToken",
-    "AspNetCore.Identity.Application",
-    ".AspNetCore.Cookies",
-)
+def storage_has_auth() -> bool:
+    """True if the persisted storage state holds a logged-in alza.cz cookie.
+
+    This is the authoritative login signal: it inspects real cookie *names*
+    (not fragile DOM scraping, not cookie values). Used by ``whoami`` and
+    ``diagnose`` so they agree with the actual session.
+    """
+
+    paths = ensure_home()
+    if not paths.storage_state.exists():
+        return False
+    try:
+        data = json.loads(paths.storage_state.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    names = {c.get("name", "") for c in data.get("cookies", []) if c.get("name")}
+    return any(any(h in n for h in _AUTH_COOKIE_HINTS) for n in names)
 
 
 async def warm_interactive() -> bool:
@@ -161,7 +169,9 @@ async def _wait_for_login(context, timeout: int = 600) -> bool:
         except Exception:
             return False
         names = {c.get("name", "") for c in cookies}
-        if any(any(h in n for h in _AUTH_COOKIE_HINTS) for n in names):
+        # Wait for the definitive post-redirect cookie so we never persist a
+        # half-finished OIDC login (idsrv can appear mid-flow on identity.alza.cz).
+        if any(any(h in n for h in _LOGIN_COMPLETE_COOKIES) for n in names):
             return True
         try:
             if not context.pages:

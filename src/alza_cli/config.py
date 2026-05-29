@@ -73,3 +73,34 @@ def user_agent() -> str:
 
 
 BASE_URL = "https://www.alza.cz"
+
+
+# Cookie-name substrings that indicate a logged-in alza.cz session.
+# Probed live (May 2026): after a real OIDC sign-in the persisted state holds
+# ``ApplicationCookie`` (alza.cz app auth), ``idsrv`` (identity.alza.cz SSO),
+# and ``.AspNetCore.active_sessions`` (active login session tracking). The
+# trailing entries are legacy/guessed names kept as harmless extra hints.
+# This is the single source of truth — browser.py and debug.py both import it.
+AUTH_COOKIE_HINTS = (
+    "ApplicationCookie",
+    ".AspNetCore.active_sessions",
+    "idsrv",
+    ".ASPXAUTH",
+    "ASPXFORMSAUTH",
+    "AlzaAuth",
+    "AlzaUser",
+    "Alza_Nick",
+    "AlzaCustomer",
+    "AlzaCommerce",
+    "ALZA_SECURITY",
+    "ALZALOGGED",
+    "ALZACOMPANY",
+    "AlzaCustomerToken",
+    "AspNetCore.Identity.Application",
+    ".AspNetCore.Cookies",
+)
+
+# Stricter marker: only set after the full OIDC round-trip lands back on
+# alza.cz. ``login_interactive`` waits for this before saving state and
+# auto-closing, so we never persist a half-finished login.
+LOGIN_COMPLETE_COOKIES = ("ApplicationCookie",)
