@@ -72,6 +72,26 @@ def _select_first(root: HTMLParser | Node, selectors: Iterable[str]) -> Optional
     return None
 
 
+def _jsonld_image_url(image) -> Optional[str]:
+    """Normalize a JSON-LD `image` value to a URL string.
+
+    Alza emits this as a bare URL, an ImageObject dict ({"@type": "ImageObject",
+    "url": ...}), or a list mixing either form. Take the first usable URL.
+    """
+    if isinstance(image, list):
+        for item in image:
+            url = _jsonld_image_url(item)
+            if url:
+                return url
+        return None
+    if isinstance(image, dict):
+        url = image.get("url") or image.get("contentUrl")
+        return url if isinstance(url, str) else None
+    if isinstance(image, str):
+        return image
+    return None
+
+
 def parse_search(html: str, query: str) -> list[Product]:
     """Parse alza.cz/search.htm?exps=<query> result page into Product list."""
 
@@ -196,11 +216,7 @@ def parse_product_detail(html: str, url: str) -> ProductDetail:
                 review_count = int(agg.get("reviewCount") or agg.get("ratingCount") or 0) or None
             except (TypeError, ValueError):
                 pass
-        image = ld.get("image")
-        if isinstance(image, list) and image:
-            image_url = image[0]
-        elif isinstance(image, str):
-            image_url = image
+        image_url = _jsonld_image_url(ld.get("image"))
 
     # HTML fallbacks
     if not name:
