@@ -541,3 +541,190 @@ def checkout() -> bool:
         "Až budeš hotový, zavři okno (cmd+Q nebo X)."
     )
     return asyncio.run(browser.open_headed_at(f"{BASE_URL}/Order1.htm", message))
+
+
+# ----- Automated order placement -----
+
+
+async def _settle(page) -> None:
+    try:
+        await page.wait_for_load_state("networkidle", timeout=8000)
+    except Exception:
+        pass
+
+
+def _dbg() -> str:
+    return f"Debug snapshot in {dbg.debug_dir()}"
+
+
+async def _apply_coupon(page, code: str) -> bool:
+    """Best-effort: expand the discount block, type the code, submit. Whether
+    it actually lowers the price is reflected in the scraped total, not here."""
+
+    try:
+        # Expand the collapsed discount block, then fill the real input.
+        title = await page.query_selector("#discountContainerDiscountCode .insertItemTitle")
+        if title:
+            await title.click()
+            await page.wait_for_timeout(700)
+        inp = await page.query_selector("#txtDiscountCode")
+        if not inp:
+            return False
+        await inp.fill(code)
+        btn = await page.query_selector("#discountContainerDiscountCode .insertItemBtn")
+        if btn:
+            await btn.click()
+        else:
+            await inp.press("Enter")
+        await page.wait_for_timeout(4000)
+        return True
+    except Exception:
+        return False
+
+
+async def _scrape_order3(page) -> dict:
+    """Pull the human-readable order summary from the Order3 page so the caller
+    can show exactly what will be (or was) submitted."""
+
+    js = """() => {
+      const pick = (sels) => {
+        for (const s of sels) {
+          const el = document.querySelector(s);
+          if (el) { const t=(el.innerText||'').trim().replace(/\\s+/g,' '); if(t) return t; }
+        }
+        return null;
+      };
+      const byText = (needle) => {
+        const els=[...document.querySelectorAll('span,div,strong,td,li,p')];
+        for (const el of els){ const t=(el.innerText||'').trim(); if(t && t.includes(needle) && t.length<80) return t; }
+        return null;
+      };
+      return {
+        total: byText('K úhradě s DPH') || byText('Celkem'),
+        delivery: byText('AlzaBox') || byText('<box>'),
+        payment: byText('vyzvednutí') || byText('Kartou'),
+      };
+    }"""
+    try:
+        return await page.evaluate(js)
+    except Exception:
+        return {}
+
+
+async def _scrape_order_number(page) -> Optional[str]:
+    js = """() => {
+      const m = (document.body.innerText||'').match(/[čc]íslo (?:objednávky|obj\\.?)[^0-9]*([0-9]{6,})/i);
+      if (m) return m[1];
+      const m2 = (document.body.innerText||'').match(/objednávk[ay][^0-9]*([0-9]{8,})/i);
+      return m2 ? m2[1] : null;
+    }"""
+    try:
+        return await page.evaluate(js)
+    except Exception:
+        return None
+
+
+def order(
+    confirm: bool = False,
+    coupon: Optional[str] = None,
+    box: str = "<box>",
+) -> dict:
+    """Drive the full Alza checkout: AlzaBox delivery + pay-on-pickup.
+
+    SAFETY: with ``confirm=False`` this is a DRY-RUN — it walks to the Order3
+    summary and stops WITHOUT clicking "Potvrdit nákup". Only ``confirm=True``
+    places the real, paid, non-refundable order.
+    """
+
+    return asyncio.run(_order_async(confirm=confirm, coupon=coupon, box=box))
+
+
+async def _order_async(confirm: bool, coupon: Optional[str], box: str) -> dict:
+    ensure_home()
+    result: dict = {"placed": False, "steps": []}
+    async with browser.open_context(headless=True) as context:
+        page = await context.new_page()
+        dbg.attach_page_logging(page)
+
+        # Step 1 — cart.
+        await page.goto(f"{BASE_URL}/Order1.htm", wait_until="domcontentloaded")
+        await _settle(page)
+        await dbg.capture(page, "order:01-cart")
+        if not await page.query_selector("[data-commodityid], .product.tbody"):
+            raise ParseError("Cart appears empty — nothing to order. " + _dbg())
+        if coupon:
+            applied = await _apply_coupon(page, coupon)
+            result["steps"].append(f"coupon {coupon}: {'submitted' if applied else 'field-not-found'}")
+        cont = await page.query_selector("a.js-button-order-continue")
+        if not cont:
+            raise ParseError("Cart 'Pokračovat' button not found. " + _dbg())
+        await cont.click()
+        await page.wait_for_url("**/Order2.htm", timeout=15000)
+        await _settle(page)
+        result["steps"].append("reached Order2 (Doprava a platba)")
+
+        # Step 2 — delivery + payment.
+        await dbg.capture(page, "order:02-order2-loaded")
+        pay = page.get_by_text("Kartou při vyzvednutí", exact=False)
+        # Payment options only render once a delivery is chosen. Select the
+        # AlzaBox ONLY if payment isn't already showing — Alza remembers the
+        # last delivery and pre-selects it, and these rows behave like
+        # checkboxes, so re-clicking a selected one would toggle it OFF.
+        if await pay.count() == 0:
+            try:
+                await page.get_by_text(box, exact=False).first.click(timeout=8000)
+            except Exception:
+                raise ParseError(f"Delivery option matching '{box}' not found. " + _dbg())
+            await page.wait_for_timeout(3500)
+        try:
+            await pay.first.wait_for(state="visible", timeout=8000)
+        except Exception:
+            raise ParseError("Payment 'Kartou při vyzvednutí' not available after selecting delivery. " + _dbg())
+        await pay.first.click(timeout=8000)
+        await page.wait_for_timeout(2500)
+        await dbg.capture(page, "order:02-delivery-payment")
+        btn2 = await page.query_selector("#confirmOrder2Button")
+        cls2 = (await btn2.get_attribute("class")) if btn2 else None
+        if not btn2 or "disabled" in (cls2 or ""):
+            raise ParseError("Order2 'Pokračovat' still disabled — delivery/payment not accepted. " + _dbg())
+        await btn2.click()
+        # Tolerant transition: the Order2→Order3 nav can take a while.
+        try:
+            await page.wait_for_url("**/Order3.htm", timeout=20000)
+        except Exception:
+            await page.wait_for_timeout(4000)
+        await _settle(page)
+        if "Order3" not in page.url and not await page.query_selector("a.js-order3-continue"):
+            raise ParseError("Did not reach Order3 (Dodací údaje) after 'Pokračovat'. " + _dbg())
+        await dbg.capture(page, "order:03-summary")
+        result["steps"].append("reached Order3 (Dodací údaje)")
+        result["summary"] = await _scrape_order3(page)
+
+        # Final gate.
+        if not confirm:
+            result["note"] = "DRY-RUN: order NOT placed. Re-run with confirm=True to place."
+            await page.close()
+            return result
+
+        final = await page.query_selector("a.js-order3-continue")
+        if not final:
+            raise ParseError("Final 'Potvrdit nákup' button not found. " + _dbg())
+        await final.click()
+        try:
+            await page.wait_for_url("**/Order4**", timeout=20000)
+        except Exception:
+            await page.wait_for_timeout(8000)
+        await _settle(page)
+        await dbg.capture(page, "order:04-confirmation")
+        result["placed"] = True
+        result["confirmation_url"] = page.url
+        order_no = await _scrape_order_number(page)
+        if not order_no:
+            # Fall back to the order id embedded in the confirmation URL,
+            # e.g. .../order-details-<id>.htm
+            m = re.search(r"order-details-(\d+)", page.url)
+            if m:
+                order_no = m.group(1)
+        result["order_number"] = order_no
+        await page.close()
+    return result

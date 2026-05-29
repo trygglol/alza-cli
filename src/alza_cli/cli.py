@@ -94,6 +94,26 @@ def checkout() -> None:
 
 
 @app.command()
+def order(
+    confirm: bool = typer.Option(
+        False,
+        "--confirm",
+        help="ACTUALLY place the order (real, paid, non-refundable). Without it: dry-run to summary.",
+    ),
+    coupon: Optional[str] = typer.Option(None, "--coupon", help="Discount/voucher code to apply on the cart."),
+    box: str = typer.Option("<box>", "--box", help="AlzaBox name substring to match in delivery list."),
+) -> None:
+    """Place an order: AlzaBox delivery + payment on pickup.
+
+    Safe by default: a dry-run walks to the Order3 summary and stops WITHOUT
+    clicking "Potvrdit nákup". Pass --confirm to place the real order.
+    """
+
+    report = _handle("order", actions.order, confirm=confirm, coupon=coupon, box=box)
+    output.emit_json(report)
+
+
+@app.command()
 def search(
     query: str = typer.Argument(..., help="Search query, e.g. 'iphone 16'"),
     limit: int = typer.Option(20, "--limit", "-n", help="Max results."),
